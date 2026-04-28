@@ -5,20 +5,14 @@
 Base test harness for Coriolis integration tests.
 
 Starts conductor, scheduler, and worker services in-process using
-oslo.messaging's fake:// transport and a temporary SQLite database. Serves
-the Coriolis REST API via cheroot on a random local port. No RabbitMQ,
-Keystone, or Barbican are required.
-
-Tasks are executed in-process as greenlets rather than subprocesses. The
-fake:// oslo.messaging transport is in-memory and process-local; subprocess
-tasks would initialise their own isolated transport with no conductor listener,
-causing every event-handler RPC call from the task to block indefinitely.
+oslo.messaging's and temporary database and messaging containers. Serves
+the Coriolis REST API via cheroot on a random local port.
+No Keystone or Barbican are required.
 
 Must be run as root (scsi_debug block device setup requires it).
 """
 
 import os
-import queue
 import shutil
 import socket
 import tempfile
@@ -43,12 +37,10 @@ from coriolis import context
 from coriolis.db import api as db_api
 from coriolis.db.sqlalchemy import api as sqlalchemy_api
 from coriolis.db.sqlalchemy import migration as db_migration
-from coriolis import exception
 from coriolis import policy as policy_module
 from coriolis import rpc as rpc_module
 from coriolis.scheduler.rpc import server as scheduler_rpc_server
 from coriolis import service
-from coriolis.tasks import factory as task_runners_factory
 from coriolis.tests.integration import utils as test_utils
 from coriolis import utils as coriolis_utils
 from coriolis.worker.rpc import server as worker_rpc_server
@@ -102,50 +94,6 @@ class _TestAPIRouter(api_v1_router.APIRouter):
         base_wsgi.Router.__init__(self, mapper)
 
 
-class _InProcessWorkerServerEndpoint(worker_rpc_server.WorkerServerEndpoint):
-    """Worker endpoint that runs tasks as greenlets instead of subprocesses.
-
-    The fake:// transport is in-memory and process-local. A subprocess would
-    initialise its own isolated fake:// instance with no conductor listener, so
-    every RPC call made by the task's event handler would block indefinitely.
-    """
-
-    def _exec_task_process(
-            self, ctxt, task_id, task_type, origin, destination, instance,
-            task_info, report_to_conductor=True):
-        result_q = queue.Queue()
-
-        if report_to_conductor:
-            self._rpc_conductor_client.set_task_host(
-                ctxt, task_id, self._server)
-            self._rpc_conductor_client.set_task_process(
-                ctxt, task_id, os.getpid())
-
-        def _run():
-            try:
-                task_runner = task_runners_factory.get_task_runner_class(
-                    task_type)()
-                event_handler = (
-                    worker_rpc_server._get_event_handler_for_task_type(
-                        task_type, ctxt, task_id))
-                task_result = task_runner.run(
-                    ctxt, instance, origin, destination, task_info,
-                    event_handler)
-                coriolis_utils.is_serializable(task_result)
-                result_q.put(task_result)
-            except Exception as ex:
-                LOG.exception(ex)
-                result_q.put(str(ex))
-
-        thread = coriolis_utils.start_thread(_run)
-        thread.join()
-
-        result = result_q.get_nowait()
-        if isinstance(result, str):
-            raise exception.TaskProcessException(result)
-        return result
-
-
 class _IntegrationHarness:
     """Shared Integration tests infrastructure; created once per process.
 
@@ -174,10 +122,19 @@ class _IntegrationHarness:
         self._mysql_password = "coriolis"
         self._mysql_database = "coriolis"
 
+        self._rabbitmq_container_name = "coriolis-test-rabbitmq-%s" % str(
+            uuid.uuid4()).split("-")[0]
+        self._rabbitmq_username = "coriolis"
+        self._rabbitmq_password = "coriolis"
+
         coriolis_conf.init_common_opts()
         cfg.CONF([], project='coriolis', version='1.0.0',
                  default_config_files=[], default_config_dirs=[])
-        cfg.CONF.set_override('messaging_transport_url', 'fake://')
+        transport_url = ('rabbit://%(user)s:%(password)s@localhost:5672/') % {
+            "user": self._rabbitmq_username,
+            "password": self._rabbitmq_password,
+        }
+        cfg.CONF.set_override('messaging_transport_url', transport_url)
         cfg.CONF.set_override(
             'providers', [_TEST_EXPORT_PROVIDER, _TEST_IMPORT_PROVIDER])
         db_url = ('mysql+pymysql://%(user)s:%(password)s'
@@ -211,6 +168,7 @@ class _IntegrationHarness:
         sqlalchemy_api._facade = None
         rpc_module._TRANSPORT = None
 
+        self._start_rabbitmq_container()
         self._start_db_container()
 
         engine = db_api.get_engine()
@@ -231,6 +189,21 @@ class _IntegrationHarness:
                 "-e", f"MYSQL_DATABASE={self._mysql_database}",
                 "-p", "3306:3306",
                 "mariadb:10-jammy",
+            ])
+
+    def _start_rabbitmq_container(self):
+        coriolis_utils.exec_process(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                self._rabbitmq_container_name,
+                "-e", f"RABBITMQ_DEFAULT_USER={self._rabbitmq_username}",
+                "-e", f"RABBITMQ_DEFAULT_PASS={self._rabbitmq_password}",
+                "-p", "15672:15672",
+                "-p", "5672:5672",
+                "rabbitmq:4",
             ])
 
     def _start_coriolis_services(self):
@@ -266,12 +239,8 @@ class _IntegrationHarness:
         #
         # We reuse the same endpoint instance for both the main topic and the
         # host-specific topic (coriolis_worker.{hostname}) to avoid a double
-        # service registration. The fake:// transport uses literal string
-        # matching instead of AMQP topic routing, so the host-specific topic
-        # must be served explicitly; otherwise the conductor's WorkerClient
-        # (which routes via SERVICE_MESSAGING_TOPIC_FORMAT) would send to a
-        # queue that nobody reads.
-        _worker_endpoint = _InProcessWorkerServerEndpoint()
+        # service registration.
+        _worker_endpoint = worker_rpc_server.WorkerServerEndpoint()
         self._worker_svc = service.MessagingService(
             constants.WORKER_MAIN_MESSAGING_TOPIC,
             [_worker_endpoint],
@@ -321,21 +290,25 @@ class _IntegrationHarness:
     def teardown(self):
         LOG.info("Teardown initiated.")
 
-        try:
-            coriolis_utils.exec_process(
-                [
-                    "docker",
-                    "stop",
-                    self._mysql_container_name
-                ])
-            coriolis_utils.exec_process(
-                [
-                    "docker",
-                    "rm",
-                    self._mysql_container_name
-                ])
-        except Exception:
-            pass
+        for container_name in [
+                self._mysql_container_name,
+                self._rabbitmq_container_name]:
+            try:
+                coriolis_utils.exec_process(
+                    [
+                        "docker",
+                        "stop",
+                        container_name
+                    ])
+                coriolis_utils.exec_process(
+                    [
+                        "docker",
+                        "rm",
+                        container_name
+                    ])
+            except Exception:
+                LOG.exception("Unable to cleanup container.")
+                pass
 
         for svc in [self._worker_host_svc, self._worker_svc,
                     self._scheduler_svc, self._conductor_svc]:
@@ -344,6 +317,7 @@ class _IntegrationHarness:
             try:
                 svc.stop()
             except Exception:
+                LOG.exception("Unable to stop service.")
                 pass
 
         if self._wsgi_server:
@@ -351,10 +325,12 @@ class _IntegrationHarness:
                 self._wsgi_server.stop()
                 self._wsgi_server_thread.join()
             except Exception:
+                LOG.exception("Unable to stop WSGI.")
                 pass
 
         shutil.rmtree(self.workdir, True)
         try:
             test_utils.destroy_scsi_debug()
         except Exception:
+            LOG.exception("Unable to cleanup scsi-debug device.")
             pass

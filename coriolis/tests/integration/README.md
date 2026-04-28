@@ -10,8 +10,8 @@ No RabbitMQ, Keystone, Barbican, or external cloud is required.
 The test harness (`harness.py`) performs a one-time setup per process:
 
 1. Creates a temporary working directory and SQLite database.
-2. Overrides `oslo.config` so all services use `fake://` messaging and
-   the temporary DB.
+2. Overrides `oslo.config` so all services use temporary
+   db and messaging containers.
 3. Runs `db_sync` to apply all schema migrations.
 4. Starts conductor, scheduler, and worker inside the test process. The
    worker runs task code inline (not in subprocesses) so that in-process
