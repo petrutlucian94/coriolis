@@ -79,3 +79,18 @@ class CoriolisKeystoneContext(wsgi.Middleware):
 
         req.environ['coriolis.context'] = ctx
         return self.application
+
+
+class NoAuthMiddleware(wsgi.Middleware):
+    """Injects a fixed admin RequestContext; replaces keystonecontext."""
+
+    @webob.dec.wsgify(RequestClass=wsgi.Request)
+    def __call__(self, req):
+        req.environ['coriolis.context'] = context.RequestContext(
+            user='integration-test',
+            project_id="coriolis",
+            is_admin=True,
+            # Skip Keystone trust creation / deletion.
+            trust_id='integration-dummy-trust',
+        )
+        return self.application

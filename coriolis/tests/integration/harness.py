@@ -47,32 +47,8 @@ from coriolis.worker.rpc import server as worker_rpc_server
 CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
-# Dotted paths to the export (source) and import (destination) provider
-# classes.
-_TEST_EXPORT_PROVIDER = (
-    "coriolis.tests.integration.providers.test_provider.exp.TestExportProvider"
-)
-_TEST_IMPORT_PROVIDER = (
-    "coriolis.tests.integration.providers.test_provider.imp.TestImportProvider"
-)
-
 # Fixed project used for all test requests.
 _TEST_PROJECT_ID = 'integration-project'
-
-
-class _NoAuthMiddleware(api_wsgi.Middleware):
-    """Injects a fixed admin RequestContext; replaces keystonecontext."""
-
-    @webob.dec.wsgify(RequestClass=api_wsgi.Request)
-    def __call__(self, req):
-        req.environ['coriolis.context'] = context.RequestContext(
-            user='integration-test',
-            project_id=_TEST_PROJECT_ID,
-            is_admin=True,
-            # Skip Keystone trust creation / deletion.
-            trust_id='integration-dummy-trust',
-        )
-        return self.application
 
 
 class _TestAPIRouter(api_v1_router.APIRouter):
