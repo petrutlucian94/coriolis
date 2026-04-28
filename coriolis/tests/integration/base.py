@@ -48,11 +48,15 @@ class CoriolisIntegrationTestBase(test_base.CoriolisBaseTestCase):
             raise unittest.SkipTest("Integration tests must run as root")
 
         super().setUpClass()
-        cls._harness = harness._IntegrationHarness.get()
+        cls._harness = harness._IntegrationHarness()
         cls._workdir = cls._harness.workdir
         cls._lock_path = cls._harness.lock_path
         cls._api_port = cls._harness.api_port
         cls._client = cls.get_client()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._harness.teardown()
 
     # Helpers for subclasses
     @classmethod
