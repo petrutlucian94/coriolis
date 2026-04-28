@@ -203,7 +203,7 @@ class _IntegrationHarness:
                 "-e", f"RABBITMQ_DEFAULT_PASS={self._rabbitmq_password}",
                 "-p", "15672:15672",
                 "-p", "5672:5672",
-                "rabbitmq:4",
+                "rabbitmq:3.13",
             ])
 
     def _start_coriolis_services(self):

@@ -3,10 +3,7 @@ keystoneauth1
 keystonemiddleware
 Jinja2
 jsonschema
-# NOTE (aznashwan, 21-03-31): kombu>=5 has some weird interactions with
-# oslo_messaging which causes extreme RAM usage in the API service,
-# so we limit its version here.
-kombu==4.6.10
+kombu
 PyMySQL
 netifaces
 oslo.cache
@@ -16,7 +13,7 @@ oslo.context<6.0.0
 oslo.db<=12.3.2
 oslo.i18n
 oslo.log
-oslo.messaging==12.2.0
+oslo.messaging
 oslo.middleware
 oslo.policy
 oslo.serialization
