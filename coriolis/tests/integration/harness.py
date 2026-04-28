@@ -17,7 +17,6 @@ import shutil
 import socket
 import tempfile
 from unittest import mock
-import uuid
 
 from cheroot import wsgi as cheroot_wsgi
 from oslo_config import cfg
@@ -95,13 +94,7 @@ class _TestAPIRouter(api_v1_router.APIRouter):
 
 
 class _IntegrationHarness:
-    """Shared Integration tests infrastructure; created once per process.
-
-    The first call to ``_IntegrationHarness.get()`` performs the full setup:
-    temp workspace, CONF overrides, DB sync, and service startup. Subsequent
-    calls return the same instance. Teardown is registered with ``atexit`` so
-    it runs after all test classes have finished, not after the first one.
-    """
+    """Integration tests infrastructure."""
 
     _instance = None
 
@@ -116,14 +109,10 @@ class _IntegrationHarness:
         self.lock_path = os.path.join(self.workdir, "locks")
         os.makedirs(self.lock_path)
 
-        self._mysql_container_name = "coriolis-test-mysql-%s" % str(
-            uuid.uuid4()).split("-")[0]
+        # Hard-coded in tox.ini.
         self._mysql_username = "root"
         self._mysql_password = "coriolis"
         self._mysql_database = "coriolis"
-
-        self._rabbitmq_container_name = "coriolis-test-rabbitmq-%s" % str(
-            uuid.uuid4()).split("-")[0]
         self._rabbitmq_username = "coriolis"
         self._rabbitmq_password = "coriolis"
 
@@ -168,43 +157,10 @@ class _IntegrationHarness:
         sqlalchemy_api._facade = None
         rpc_module._TRANSPORT = None
 
-        self._start_rabbitmq_container()
-        self._start_db_container()
-
         engine = db_api.get_engine()
         db_migration.db_sync(engine)
 
         self._start_coriolis_services()
-
-    def _start_db_container(self):
-        coriolis_utils.exec_process(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                self._mysql_container_name,
-                "-e",
-                f"MYSQL_ROOT_PASSWORD={self._mysql_password}",
-                "-e", f"MYSQL_DATABASE={self._mysql_database}",
-                "-p", "3306:3306",
-                "mariadb:10-jammy",
-            ])
-
-    def _start_rabbitmq_container(self):
-        coriolis_utils.exec_process(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                self._rabbitmq_container_name,
-                "-e", f"RABBITMQ_DEFAULT_USER={self._rabbitmq_username}",
-                "-e", f"RABBITMQ_DEFAULT_PASS={self._rabbitmq_password}",
-                "-p", "15672:15672",
-                "-p", "5672:5672",
-                "rabbitmq:3.13",
-            ])
 
     def _start_coriolis_services(self):
         """Start conductor, scheduler, worker, and API in-process."""
@@ -289,26 +245,6 @@ class _IntegrationHarness:
 
     def teardown(self):
         LOG.info("Teardown initiated.")
-
-        for container_name in [
-                self._mysql_container_name,
-                self._rabbitmq_container_name]:
-            try:
-                coriolis_utils.exec_process(
-                    [
-                        "docker",
-                        "stop",
-                        container_name
-                    ])
-                coriolis_utils.exec_process(
-                    [
-                        "docker",
-                        "rm",
-                        container_name
-                    ])
-            except Exception:
-                LOG.exception("Unable to cleanup container.")
-                pass
 
         for svc in [self._worker_host_svc, self._worker_svc,
                     self._scheduler_svc, self._conductor_svc]:
