@@ -723,3 +723,11 @@ class BaseWindowsMorphingTools(base.BaseOSMorphingTools):
 
     def post_packages_uninstall(self, package_names):
         pass
+
+    def register_firstboot_script(
+        self,
+        script: str,
+        index: int = 0,
+        user_provided=True,
+    ):
+        raise NotImplementedError()
