@@ -175,6 +175,13 @@ def morph_image(origin_provider, destination_provider, connection_info,
             origin_provider, destination_provider, connection_info,
             osmorphing_info, user_scripts, event_handler, os_mount_tools,
         )
+    except Exception as ex:
+        LOG.exception("morphing failed")
+        sleep = 600
+        event_manager.progress_update(
+            f"osmorphing failed, sleeping {sleep} before cleanup, exc: {ex}")
+        import time; time.sleep(sleep)
+        raise
     finally:
         event_manager.progress_update("Dismounting OS partitions")
         try:

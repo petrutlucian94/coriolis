@@ -840,4 +840,4 @@ class BaseWindowsMorphingTools(base.BaseOSMorphingTools):
             return
 
         self._inject_first_boot_task_definition()
-        self._define_first_boot_scheuled_task()
+        # self._define_first_boot_scheuled_task()
