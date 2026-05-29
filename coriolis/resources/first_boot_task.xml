@@ -1,0 +1,25 @@
+<!-- https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-schema -->
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+
+  <Triggers>
+    <BootTrigger>
+      <Enabled>true</Enabled>
+    </BootTrigger>
+  </Triggers>
+
+  <Principals>
+    <Principal id="SYSTEM">
+      <UserId>S-1-5-18</UserId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+
+  <Actions Context="SYSTEM">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>-NoProfile -ExecutionPolicy Bypass -File C:\coriolis\firstboot\run-firstboot.ps1</Arguments>
+    </Exec>
+  </Actions>
+
+</Task>

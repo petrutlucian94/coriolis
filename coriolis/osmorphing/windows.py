@@ -182,6 +182,8 @@ $IPS_INFO = ConvertFrom-Json $ips_info_json
 Invoke-Main $NICS_INFO $IPS_INFO
 """  # noqa
 
+FIRST_BOOT_TASK_NAME = "coriolis-firstboot"
+
 
 class BaseWindowsMorphingTools(base.BaseOSMorphingTools):
 
@@ -730,4 +732,112 @@ class BaseWindowsMorphingTools(base.BaseOSMorphingTools):
         index: int = 0,
         user_provided=True,
     ):
-        raise NotImplementedError()
+        if len(script) == 0:
+            LOG.debug("Empty first-boot script, skipping...")
+            return
+
+        self.setup_firstboot_script_runner()
+
+        base_dir = f"{self._os_root_dir}\\ProgramData\\coriolis\\firstboot"
+        if user_provided:
+            script_dir = f"{base_dir}\\user"
+        else:
+            script_dir = f"{base_dir}\\service"
+
+        unique_id = str(uuid.uuid4()).split("-")[0]
+        script_path = os.path.join(script_dir, f"{index:02d}-{unique_id}.sh")
+
+        self._conn.exec_ps_command(f"mkdir -Force {script_dir}")
+        utils.write_winrm_file(
+            self._conn,
+            script_path,
+            script)
+
+        LOG.info(f"Registered first-boot script: {script_path}")
+
+    def _inject_first_boot_task_definition(self):
+        task_xml_res_path = os.path.join(
+            utils.get_resources_dir(),
+            "first_boot_task.xml")
+        remote_task_xml_path = (
+            "%s\\Windows\\System32\\Tasks\\%s" %
+            (self._os_root_dir, FIRST_BOOT_TASK_NAME))
+        with open(task_xml_res_path) as f:
+            utils.write_winrm_file(
+                self._conn,
+                remote_task_xml_path,
+                f.read())
+
+    def _inject_first_boot_runner_script(self) -> bool:
+        """Returns True if the script was already injected."""
+        runner_script_res_path = os.path.join(
+            utils.get_resources_bin_dir(),
+            "first_boot_runner.ps1")
+        firstboot_base_dir = "%s\\ProgramData\\coriolis\\firstboot" % (
+            self._os_root_dir)
+        remote_runner_script_path = f"{firstboot_base_dir}\\run-firstboot.ps1"
+
+        if self._conn.test_path(remote_runner_script_path):
+            LOG.debug("First boot script runner already injected.")
+            return True
+
+        self._conn.exec_ps_command(
+            "mkdir '%s' -Force" % firstboot_base_dir,
+            ignore_stdout=True)
+        with open(runner_script_res_path) as f:
+            utils.write_winrm_file(
+                self._conn,
+                remote_runner_script_path,
+                f.read())
+        return False
+
+    def _define_first_boot_scheuled_task(self):
+        task_guid = "{%s}" % str(uuid.uuid4())
+        hive_key = str(uuid.uuid4())
+        registry_hive = f"HKLM\\{hive_key}"
+        registry_hive_path = f"HKLM:\\{hive_key}"
+
+        task_cache_path = (
+            f"{registry_hive_path}\\Microsoft\\Windows NT\\CurrentVersion\\"
+            "Schedule\\TaskCache")
+        task_tree_path = "%s\\Tree\\%s" % (
+            task_cache_path, FIRST_BOOT_TASK_NAME)
+        task_guid_path = "%s\\Tasks\\%s" % (task_cache_path, task_guid)
+
+        self._load_registry_hive(
+            registry_hive,
+            "%sWindows\\System32\\Config\\SOFTWARE" % self._os_root_dir)
+        try:
+            self._conn.exec_ps_command(
+                f"New-Item -Path '{task_tree_path}' -Force")
+            self._conn.exec_ps_command(
+                "New-ItemProperty -Force "
+                f"-Path '{task_tree_path}' "
+                "-Name 'Id' "
+                f"-Value '{task_guid}' "
+                "-PropertyType String"
+            )
+
+            self._conn.exec_ps_command(
+                f"New-Item -Path '{task_guid_path}' -Force")
+            self._conn.exec_ps_command(
+                "New-ItemProperty -Force "
+                f"-Path '{task_guid_path}' "
+                "-Name 'Path' "
+                f"-Value '{FIRST_BOOT_TASK_NAME}' "
+                "-PropertyType String"
+            )
+        finally:
+            self._unload_registry_hive(registry_hive)
+
+    def setup_firstboot_script_runner(self):
+        """Create a scheduled task that will run first-boot scripts.
+
+        It will be used for both Coriolis scripts and user-provided scripts.
+        """
+        if self._inject_first_boot_runner_script():
+            LOG.debug("First boot runner already configured.")
+            return
+
+        self._inject_first_boot_task_definition()
+        self._define_first_boot_scheuled_task()
