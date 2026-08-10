@@ -255,7 +255,9 @@ class BaseDebianMorphingTools(base.BaseLinuxOSMorphingTools):
     def uninstall_packages(self, package_names):
         try:
             for package_name in package_names:
-                apt_get_cmd = 'apt-get remove %s -y || true' % package_name
+                apt_get_cmd = (
+                    '/bin/bash -c "DEBIAN_FRONTEND=noninteractive '
+                    'apt-get remove %s -y || true"' % package_name)
                 self._exec_cmd_chroot(apt_get_cmd)
         except exception.CoriolisException as err:
             raise exception.FailedPackageUninstallationException(
