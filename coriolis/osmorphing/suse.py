@@ -288,6 +288,8 @@ class BaseSUSEMorphingTools(base.BaseLinuxOSMorphingTools):
     def install_packages(self, package_names):
         try:
             self._exec_cmd_chroot(
+                "zypper --non-interactive --no-gpg-checks refresh -f")
+            self._exec_cmd_chroot(
                 'zypper --non-interactive install %s' % " ".join(package_names)
             )
         except exception.CoriolisException as err:
