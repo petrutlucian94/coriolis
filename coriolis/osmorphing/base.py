@@ -2,6 +2,7 @@
 # All Rights Reserved.
 
 import abc
+import datetime
 import itertools
 import os
 import re
@@ -657,8 +658,28 @@ class BaseLinuxOSMorphingTools(BaseOSMorphingTools):
     def _set_selinux_autorelabel(self):
         LOG.debug("setting autorelabel on /")
         try:
-            self._exec_cmd_chroot(
-                "touch /.autorelabel")
+            self._exec_cmd_chroot("touch /.autorelabel")
+
+            if self._test_path_chroot("/etc/selinux", is_dir=True):
+                # Newer releases expect the following location.
+                self._exec_cmd_chroot("touch /etc/selinux/.autorelabel")
+
+            if self._test_path_chroot("/etc/selinux/.relabelled"):
+                last_relabelled = self._get_modified_time_chroot(
+                    "/etc/selinux/.relabelled")
+                autorelabel_mtime = self._get_modified_time_chroot(
+                    "/.autorelabel")
+                if autorelabel_mtime <= last_relabelled:
+                    LOG.warning(
+                        "/etc/selinux/.relabelled newer than the "
+                        "/.autorelabel created by us: %s <= %s."
+                        "Potential clock issue, auto-relabeling may "
+                        "be skipped.",
+                        autorelabel_mtime, last_relabelled)
+                else:
+                    LOG.debug(
+                        "Auto-relabel timestamp: %s, last relabeled: %s",
+                        autorelabel_mtime, last_relabelled)
         except Exception as err:
             LOG.warning("Failed to set autorelabel: %r" % err)
 
@@ -773,7 +794,7 @@ class BaseLinuxOSMorphingTools(BaseOSMorphingTools):
                 self._enable_systemd_service(
                     CLOUD_INIT_SERVICE_UNIT_NAME_FALLBACK)
 
-    def _test_path_chroot(self, path):
+    def _test_path_chroot(self, path, is_dir=False):
         # This method uses _exec_cmd_chroot() instead of SFTP stat()
         # because in some situations, the SSH user used may not have
         # execute rights on one or more of the folders that lead up
@@ -782,9 +803,32 @@ class BaseLinuxOSMorphingTools(BaseOSMorphingTools):
         # ensures you always run as root.
         if path.startswith('/') is False:
             path = "/%s" % path
+        if is_dir:
+            check = "-d"
+        else:
+            check = "-f"
         exists = self._exec_cmd_chroot(
-            '[ -f "%s" ] && echo 1 || echo 0' % path).rstrip('\n')
+            f'[ {check} "{path}" ] && echo 1 || echo 0').rstrip('\n')
         return exists == "1"
+
+    def _get_modified_time_chroot(
+        self,
+        chroot_path: str,
+        utc=False,
+    ) -> datetime.datetime:
+        """Returns the time of the last file modification."""
+        if not chroot_path.startswith('/'):
+            chroot_path = f"/{chroot_path}"
+
+        if utc:
+            prefix = "TZ=UTC "
+            tz_arg = datetime.UTC
+        else:
+            prefix = ""
+            tz_arg = None
+        epoch_time = self._exec_cmd_chroot(
+            prefix + f'stat -c %Y "{chroot_path}"')
+        return datetime.datetime.fromtimestamp(int(epoch_time), tz=tz_arg)
 
     def _read_file_sudo(self, chroot_path):
         if chroot_path.startswith("/") is False:
