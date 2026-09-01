@@ -48,9 +48,41 @@ class UbuntuOSMountToolsTestCase(test_base.CoriolisBaseTestCase):
             [
                 mock.call("apt-get update -y"),
                 mock.call(
-                    "apt-get -o DPkg::Lock::Timeout=600 "
-                    "install lvm2 psmisc cryptsetup -y"
+                    "apt-get -o DPkg::Lock::Timeout=600 install psmisc cryptsetup -y"
                 ),
+            ]
+        )
+        # NOTE: cryptsetup pulls in keyboard-configuration, whose postinst
+        # would otherwise prompt for a keyboard layout and hang the install.
+        self.assertEqual('noninteractive', self.tools._environment['DEBIAN_FRONTEND'])
+        mock_exec_cmd.assert_has_calls(
+            [mock.call("sudo modprobe dm-mod"), mock.call("sudo modprobe dm-crypt")]
+        )
+
+    @mock.patch.object(ubuntu.base.BaseSSHOSMountTools, '_exec_sudo_env_cmd')
+    @mock.patch.object(ubuntu.base.BaseSSHOSMountTools, '_exec_cmd')
+    @mock.patch.object(ubuntu.base.BaseSSHOSMountTools, 'setup')
+    def test_setup_lvm_not_installed(
+        self, mock_setup, mock_exec_cmd, mock_exec_sudo_env_cmd
+    ):
+        def fake_exec_cmd(cmd):
+            if cmd == "which vgs":
+                raise Exception("vgs not available")
+            return ""
+
+        mock_exec_cmd.side_effect = fake_exec_cmd
+
+        result = self.tools.setup()
+        self.assertIsNone(result)
+
+        mock_setup.assert_called_once_with()
+        mock_exec_sudo_env_cmd.assert_has_calls(
+            [
+                mock.call("apt-get update -y"),
+                mock.call(
+                    "apt-get -o DPkg::Lock::Timeout=600 install psmisc cryptsetup -y"
+                ),
+                mock.call("apt-get -o DPkg::Lock::Timeout=600 install lvm2 -y"),
             ]
         )
         # NOTE: cryptsetup pulls in keyboard-configuration, whose postinst

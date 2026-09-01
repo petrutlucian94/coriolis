@@ -42,7 +42,34 @@ class BaseRedHatOSMountToolsTestCase(test_base.CoriolisBaseTestCase):
 
         mock_setup.assert_called_once_with()
         mock_exec_sudo_env_cmd.assert_called_once_with(
-            "yum install -y lvm2 psmisc cryptsetup"
+            "yum install -y psmisc cryptsetup"
+        )
+        mock_exec_cmd.assert_has_calls(
+            [mock.call("sudo modprobe dm-mod"), mock.call("sudo modprobe dm-crypt")]
+        )
+
+    @mock.patch.object(redhat.base.BaseSSHOSMountTools, '_exec_sudo_env_cmd')
+    @mock.patch.object(redhat.base.BaseSSHOSMountTools, '_exec_cmd')
+    @mock.patch.object(redhat.base.BaseSSHOSMountTools, 'setup')
+    def test_setup_lvm_not_installed(
+        self, mock_setup, mock_exec_cmd, mock_exec_sudo_env_cmd
+    ):
+        def fake_exec_cmd(cmd):
+            if cmd == "which vgs":
+                raise Exception("vgs not available")
+            return ""
+
+        mock_exec_cmd.side_effect = fake_exec_cmd
+
+        result = self.tools.setup()
+        self.assertIsNone(result)
+
+        mock_setup.assert_called_once_with()
+        mock_exec_sudo_env_cmd.assert_has_calls(
+            [
+                mock.call("yum install -y psmisc cryptsetup"),
+                mock.call("yum install -y lvm2"),
+            ]
         )
         mock_exec_cmd.assert_has_calls(
             [mock.call("sudo modprobe dm-mod"), mock.call("sudo modprobe dm-crypt")]

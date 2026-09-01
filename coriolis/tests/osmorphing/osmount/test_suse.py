@@ -68,7 +68,41 @@ class BaseSUSEOSMountToolsTestCase(test_base.CoriolisBaseTestCase):
         mock_setup.assert_called_once_with()
         mock_retry_on_error.assert_called_once_with(max_attempts=10, sleep_seconds=30)
         mock_exec_sudo_env_cmd.assert_called_once_with(
-            "zypper --non-interactive install lvm2 psmisc cryptsetup"
+            "zypper --non-interactive install psmisc cryptsetup"
+        )
+        mock_exec_cmd.assert_has_calls(
+            [
+                mock.call("sudo modprobe dm-mod"),
+                mock.call("sudo modprobe dm-crypt"),
+                mock.call("sudo rm -f /etc/lvm/devices/system.devices"),
+            ]
+        )
+
+    @mock.patch.object(suse.utils, 'retry_on_error')
+    @mock.patch.object(suse.base.BaseSSHOSMountTools, '_exec_sudo_env_cmd')
+    @mock.patch.object(suse.base.BaseSSHOSMountTools, '_exec_cmd')
+    @mock.patch.object(suse.base.BaseSSHOSMountTools, 'setup')
+    def test_setup_lvm_not_installed(
+        self, mock_setup, mock_exec_cmd, mock_exec_sudo_env_cmd, mock_retry_on_error
+    ):
+        def fake_exec_cmd(cmd):
+            if cmd == "which vgs":
+                raise Exception("vgs not available")
+            return ""
+
+        mock_exec_cmd.side_effect = fake_exec_cmd
+
+        mock_retry_on_error.return_value = lambda f: f
+        result = self.tools.setup()
+        self.assertIsNone(result)
+
+        mock_setup.assert_called_once_with()
+        mock_retry_on_error.assert_called_once_with(max_attempts=10, sleep_seconds=30)
+        mock_exec_sudo_env_cmd.assert_has_calls(
+            [
+                mock.call("zypper --non-interactive install psmisc cryptsetup"),
+                mock.call("zypper --non-interactive install lvm2"),
+            ]
         )
         mock_exec_cmd.assert_has_calls(
             [

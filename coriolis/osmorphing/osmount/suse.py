@@ -38,7 +38,21 @@ class SUSEOSMountTools(base.BaseLinuxOSMountTools):
         retry_ssh_cmd = utils.retry_on_error(max_attempts=10, sleep_seconds=30)(
             self._exec_sudo_env_cmd
         )
-        retry_ssh_cmd("zypper --non-interactive install lvm2 psmisc cryptsetup")
+        retry_ssh_cmd("zypper --non-interactive install psmisc cryptsetup")
+
+        # We'll handle lvm2 separately, the post-installation hooks may fail
+        # in case of minion pools that have already been used to replicate disks.
+        #
+        # It's caused by the fact that we're disabling lvm-metad and the LVM
+        # udev rules before disk replication in order to prevent these logical
+        # volumes from being mounted automatically.
+        try:
+            self._exec_cmd("which vgs")
+            LOG.info("lvm2 already installed, skipping installation.")
+        except Exception:
+            # LVM2 missing, let's install it.
+            retry_ssh_cmd("zypper --non-interactive install lvm2")
+
         self._exec_cmd("sudo modprobe dm-mod")
         self._exec_cmd("sudo modprobe dm-crypt")
         self._exec_cmd("sudo rm -f /etc/lvm/devices/system.devices")
