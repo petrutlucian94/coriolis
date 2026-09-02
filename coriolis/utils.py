@@ -399,9 +399,9 @@ def _exec_ssh_cmd(ssh, cmd, environment=None, get_pty=False, timeout=None):
     except socket.timeout:
         raise exception.MinionMachineCommandTimeout()
     exit_code = stdout.channel.recv_exit_status()
+    stdout_str = std_out.decode(errors='ignore')
+    stderr_str = std_err.decode(errors='ignore')
     if exit_code:
-        stdout_str = std_out.decode(errors='ignore')
-        stderr_str = std_err.decode(errors='ignore')
         msg = (
             "Command \"%s\" failed on host '%s' with exit code: %s\n"
             "stdout: %s\nstd_err: %s"
@@ -414,6 +414,13 @@ def _exec_ssh_cmd(ssh, cmd, environment=None, get_pty=False, timeout=None):
         ):
             raise exception.SSHCommandNotFoundException(msg)
         raise exception.SSHCommandFailed(msg, exit_code=exit_code)
+    else:
+        msg = (
+            "Command \"%s\" finished on host '%s' with exit code: %s\n"
+            "stdout: %s\nstd_err: %s"
+            % (sanitized_cmd, remote_str, exit_code, stdout_str, stderr_str)
+        )
+        LOG.debug(msg)
     # Most of the commands will use pseudo-terminal which unfortunately will
     # include a '\r' to every newline. This will affect all plugins too, so
     # best we can do now is replace them.
