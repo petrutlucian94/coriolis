@@ -753,7 +753,7 @@ class BaseLinuxOSMountTools(luks_mixin.LinuxLUKSMixin, BaseSSHOSMountTools):
             'mountpoint -q %s && sudo mount --make-rprivate %s || true'
             % (root_dir, root_dir)
         )
-        self._exec_cmd('mountpoint -q %s && sudo umount -R %s' % (root_dir, root_dir))
+        self._exec_cmd('mountpoint -q %s && sudo umount -Rv %s' % (root_dir, root_dir))
 
         self._close_luks_devices()
 
