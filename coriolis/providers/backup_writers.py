@@ -257,7 +257,7 @@ class BaseBackupWriterImpl(with_metaclass(abc.ABCMeta)):
         pass
 
     @abc.abstractmethod
-    def write(self, data):
+    def write(self, data, encoding=None):
         pass
 
     @abc.abstractmethod
@@ -319,7 +319,11 @@ class FileBackupWriterImpl(BaseBackupWriterImpl):
     def truncate(self, size):
         self._file.truncate(size)
 
-    def write(self, data):
+    def write(self, data, encoding=None):
+        if encoding:
+            raise exception.InvalidInput(
+                f"The file backup writer does not supported {encoding} encoded chunks."
+            )
         self._file.write(data)
 
     def close(self):
@@ -463,7 +467,7 @@ class SSHBackupWriterImpl(BaseBackupWriterImpl):
                 self._enc_q.task_done()
         LOG.debug("Backup encoder stopped.")
 
-    def write(self, data):
+    def write(self, data, encoding=None):
         if self._closing:
             raise exception.CoriolisException("Attempted to write to a closed writer.")
 
@@ -471,6 +475,11 @@ class SSHBackupWriterImpl(BaseBackupWriterImpl):
             raise exception.CoriolisException(
                 "Failed to write data. See log for details."
             ) from self._exception
+
+        if encoding:
+            raise exception.InvalidInput(
+                f"The file backup writer does not supported {encoding} encoded chunks."
+            )
 
         payload = {
             "offset": self._offset,
@@ -831,7 +840,7 @@ class HTTPBackupWriterImpl(BaseBackupWriterImpl):
         LOG.debug("Backup sender stopped.")
 
     @utils.retry_on_error()
-    def write(self, data):
+    def write(self, data, encoding=None):
         if self._closing:
             raise exception.CoriolisException("Attempted to write to a closed writer.")
         if self._exception:
@@ -841,7 +850,21 @@ class HTTPBackupWriterImpl(BaseBackupWriterImpl):
             "offset": self._offset,
             "data": data,
         }
-        self._comp_q.put(payload)
+        if encoding is None:
+            self._comp_q.put(payload)
+        elif encoding in ("fastlz", "gzip", "zlib", "deflate"):
+            # The payload is already compressed, skip the compressor
+            # queue, use the sender queue directly.
+            payload["encoding"] = encoding
+            payload["chunk"] = data
+            self._sender_q.put(payload)
+        elif encoding == "incompressible":
+            # The caller determined that the chunk is uncompressible,
+            # skip the compression queue.
+            payload["chunk"] = data
+            self._sender_q.put(payload)
+        else:
+            raise exception.InvalidInput("Unsupported write encoding: %s", encoding)
         self._offset += len(data)
 
     def _wait_for_queues(self):
