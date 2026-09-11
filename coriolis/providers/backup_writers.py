@@ -10,6 +10,7 @@ import errno
 import os
 import queue
 import shutil
+import struct
 import tempfile
 import threading
 import time
@@ -798,7 +799,12 @@ class HTTPBackupWriterImpl(BaseBackupWriterImpl):
             @utils.retry_on_error()
             def send():
                 self._ensure_session()
-                chunk = copy.copy(payload["chunk"])
+                if payload.get("chunk_prefix"):
+                    # This already creates a new buffer, avoid an unnecessary
+                    # copy.
+                    chunk = payload["chunk_prefix"] + payload["chunk"]
+                else:
+                    chunk = copy.copy(payload["chunk"])
                 LOG.debug(
                     "Guest path: %(path)s, offset: %(offset)d, content len: "
                     "%(content_len)d",
@@ -840,7 +846,7 @@ class HTTPBackupWriterImpl(BaseBackupWriterImpl):
         LOG.debug("Backup sender stopped.")
 
     @utils.retry_on_error()
-    def write(self, data, encoding=None):
+    def write(self, data, encoding=None, uncompressed_size=None):
         if self._closing:
             raise exception.CoriolisException("Attempted to write to a closed writer.")
         if self._exception:
@@ -857,6 +863,12 @@ class HTTPBackupWriterImpl(BaseBackupWriterImpl):
             # queue, use the sender queue directly.
             payload["encoding"] = encoding
             payload["chunk"] = data
+            if encoding == "fastlz":
+                if not uncompressed_size:
+                    raise exception.InvalidInput(
+                        "fastlz without explicit uncompressed size."
+                    )
+                payload["chunk_prefix"] = struct.pack("<I", uncompressed_size)
             self._sender_q.put(payload)
         elif encoding == "incompressible":
             # The caller determined that the chunk is uncompressible,
