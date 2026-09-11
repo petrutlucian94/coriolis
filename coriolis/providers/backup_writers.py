@@ -10,6 +10,7 @@ import errno
 import os
 import queue
 import shutil
+import struct
 import tempfile
 import threading
 import time
@@ -257,7 +258,7 @@ class BaseBackupWriterImpl(with_metaclass(abc.ABCMeta)):
         pass
 
     @abc.abstractmethod
-    def write(self, data):
+    def write(self, data, encoding=None, uncompressed_size=None):
         pass
 
     @abc.abstractmethod
@@ -319,7 +320,11 @@ class FileBackupWriterImpl(BaseBackupWriterImpl):
     def truncate(self, size):
         self._file.truncate(size)
 
-    def write(self, data):
+    def write(self, data, encoding=None, uncompressed_size=None):
+        if encoding:
+            raise exception.InvalidInput(
+                f"The file backup writer does not supported {encoding} encoded chunks."
+            )
         self._file.write(data)
 
     def close(self):
@@ -463,7 +468,7 @@ class SSHBackupWriterImpl(BaseBackupWriterImpl):
                 self._enc_q.task_done()
         LOG.debug("Backup encoder stopped.")
 
-    def write(self, data):
+    def write(self, data, encoding=None, uncompressed_size=None):
         if self._closing:
             raise exception.CoriolisException("Attempted to write to a closed writer.")
 
@@ -471,6 +476,11 @@ class SSHBackupWriterImpl(BaseBackupWriterImpl):
             raise exception.CoriolisException(
                 "Failed to write data. See log for details."
             ) from self._exception
+
+        if encoding:
+            raise exception.InvalidInput(
+                f"The file backup writer does not supported {encoding} encoded chunks."
+            )
 
         payload = {
             "offset": self._offset,
@@ -789,7 +799,12 @@ class HTTPBackupWriterImpl(BaseBackupWriterImpl):
             @utils.retry_on_error()
             def send():
                 self._ensure_session()
-                chunk = copy.copy(payload["chunk"])
+                if payload.get("chunk_prefix"):
+                    # This already creates a new buffer, avoid an unnecessary
+                    # copy.
+                    chunk = payload["chunk_prefix"] + payload["chunk"]
+                else:
+                    chunk = copy.copy(payload["chunk"])
                 LOG.debug(
                     "Guest path: %(path)s, offset: %(offset)d, content len: "
                     "%(content_len)d",
@@ -831,7 +846,7 @@ class HTTPBackupWriterImpl(BaseBackupWriterImpl):
         LOG.debug("Backup sender stopped.")
 
     @utils.retry_on_error()
-    def write(self, data):
+    def write(self, data, encoding=None, uncompressed_size=None):
         if self._closing:
             raise exception.CoriolisException("Attempted to write to a closed writer.")
         if self._exception:
@@ -841,7 +856,27 @@ class HTTPBackupWriterImpl(BaseBackupWriterImpl):
             "offset": self._offset,
             "data": data,
         }
-        self._comp_q.put(payload)
+        if encoding is None:
+            self._comp_q.put(payload)
+        elif encoding in ("fastlz", "gzip", "zlib", "deflate"):
+            # The payload is already compressed, skip the compressor
+            # queue, use the sender queue directly.
+            payload["encoding"] = encoding
+            payload["chunk"] = data
+            if encoding == "fastlz":
+                if not uncompressed_size:
+                    raise exception.InvalidInput(
+                        "fastlz without explicit uncompressed size."
+                    )
+                payload["chunk_prefix"] = struct.pack("<I", uncompressed_size)
+            self._sender_q.put(payload)
+        elif encoding == "incompressible":
+            # The caller determined that the chunk is uncompressible,
+            # skip the compression queue.
+            payload["chunk"] = data
+            self._sender_q.put(payload)
+        else:
+            raise exception.InvalidInput("Unsupported write encoding: %s", encoding)
         self._offset += len(data)
 
     def _wait_for_queues(self):
