@@ -10,7 +10,6 @@ import errno
 import os
 import queue
 import shutil
-import struct
 import tempfile
 import threading
 import time
@@ -795,16 +794,15 @@ class HTTPBackupWriterImpl(BaseBackupWriterImpl):
             if payload.get("encoding", None):
                 enc = copy.copy(payload["encoding"])
                 headers["content-encoding"] = enc
+            if payload.get("uncompressed_size") is not None:
+                headers["X-Uncompressed-Content-Length"] = str(
+                    payload["uncompressed_size"]
+                )
 
             @utils.retry_on_error()
             def send():
                 self._ensure_session()
-                if payload.get("chunk_prefix"):
-                    # This already creates a new buffer, avoid an unnecessary
-                    # copy.
-                    chunk = payload["chunk_prefix"] + payload["chunk"]
-                else:
-                    chunk = copy.copy(payload["chunk"])
+                chunk = copy.copy(payload["chunk"])
                 LOG.debug(
                     "Guest path: %(path)s, offset: %(offset)d, content len: "
                     "%(content_len)d",
@@ -864,11 +862,11 @@ class HTTPBackupWriterImpl(BaseBackupWriterImpl):
             payload["encoding"] = encoding
             payload["chunk"] = data
             if encoding == "fastlz":
-                if not uncompressed_size:
+                if uncompressed_size is None:
                     raise exception.InvalidInput(
                         "fastlz without explicit uncompressed size."
                     )
-                payload["chunk_prefix"] = struct.pack("<I", uncompressed_size)
+                payload["uncompressed_size"] = uncompressed_size
             self._sender_q.put(payload)
         elif encoding == "incompressible":
             # The caller determined that the chunk is uncompressible,
